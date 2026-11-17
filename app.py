@@ -1,7 +1,6 @@
 import os
 import yt_dlp
-import requests
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+from flask import Flask, request, jsonify, render_template, send_file, after_this_request
 
 app = Flask(__name__)
 
@@ -19,17 +18,14 @@ def search():
     ydl_opts = {
         'quiet': True,
         'extract_flat': True,
-        'force_generic_extractor': False,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            result = ydl.extract_info(f"ytsearch15:{query}", download=False)
-            
+            result = ydl.extract_info(f"ytsearch20:{query}", download=False)
             tracks = []
             for entry in result.get('entries', []):
                 thumb = entry.get('thumbnails', [{}])[-1].get('url', '') if entry.get('thumbnails') else ''
-                
                 tracks.append({
                     "id": entry.get('id'),
                     "title": entry.get('title'),
@@ -41,38 +37,38 @@ def search():
     except Exception as e:
         return jsonify({"ok": False, "err": str(e)}), 500
 
-@app.route("/api/stream/<video_id>")
-def stream_audio(video_id):
+@app.route("/api/download/<video_id>")
+def download_audio(video_id):
+    # I-download sa server as MP3 para 100% playable
+    out_tmpl = f"/tmp/{video_id}.%(ext)s"
     ydl_opts = {
-        'quiet': True,
         'format': 'bestaudio/best',
-        'nocheckcertificate': True,
-        'extract_flat': False,
+        'outtmpl': out_tmpl,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-            audio_url = info['url']
+            ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
             
-            req = requests.get(audio_url, stream=True, headers={
-                'User-Agent': 'Mozilla/5.0',
-                'Range': request.headers.get('Range', '')
-            })
-            
-            def generate():
-                for chunk in req.iter_content(chunk_size=1024*1024):
-                    yield chunk
+        file_path = f"/tmp/{video_id}.mp3"
+        if not os.path.exists(file_path):
+            return "Download failed", 500
 
-            headers = {
-                'Content-Type': req.headers.get('Content-Type', 'audio/webm'),
-                'Accept-Ranges': 'bytes',
-                'Content-Length': req.headers.get('Content-Length', ''),
-                'Content-Range': req.headers.get('Content-Range', '')
-            }
-            
-            return Response(stream_with_context(generate()), status=req.status_code, headers=headers)
-            
+        # Check kung gusto i-download (dl=1) o i-play lang sa browser
+        as_attachment = request.args.get('dl') == '1'
+        
+        return send_file(
+            file_path, 
+            mimetype="audio/mpeg", 
+            as_attachment=as_attachment, 
+            download_name=f"SeijiMusic_{video_id}.mp3"
+        )
     except Exception as e:
         return str(e), 500
 
